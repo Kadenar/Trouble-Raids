@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply m-0 bg-slate-950 text-slate-100 antialiased;
+}
+
+.overview-scrollbar {
+  --overview-scrollbar-size: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(74, 222, 128, 0.55) rgba(15, 23, 42, 0.45);
+  scrollbar-gutter: stable;
+}
+
+.overview-scrollbar::-webkit-scrollbar {
+  width: var(--overview-scrollbar-size);
+  height: var(--overview-scrollbar-size);
+}
+
+.overview-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.45);
+  border-radius: 9999px;
+}
+
+.overview-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  border: 2px solid rgba(15, 23, 42, 0.45);
+  background: linear-gradient(180deg, rgba(74, 222, 128, 0.85), rgba(34, 197, 94, 0.55));
+}
+
+.overview-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(74, 222, 128, 1), rgba(34, 197, 94, 0.75));
+}
