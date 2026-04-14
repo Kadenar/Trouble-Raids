@@ -5,28 +5,7 @@
 // - filter out CMS rows
 // - rebuild merged cell layout after filtering
 
-export type OverviewHtmlCell = {
-  text: string;
-  href?: string;
-  rowSpan?: number;
-  colSpan?: number;
-  style?: Record<string, string>;
-  bold?: boolean;
-};
-
-export type OverviewHtmlSnapshot = {
-  title: string;
-  fetchedAt: number;
-  rows: Array<Array<OverviewHtmlCell | null>>;
-  rowHeights: Array<number | null>;
-  columnWidths: Array<number | null>;
-  mergedRanges?: Array<{
-    row: number;
-    col: number;
-    numRows: number;
-    numCols: number;
-  }>;
-};
+import type { OverviewCell, OverviewSnapshot } from './types';
 
 const CMS_EVENT_PATTERNS = [/wing\s*8\s*cms/i, /strike\s*cms/i, /wing\s*4\s*cms/i];
 
@@ -103,7 +82,7 @@ function parseNumber(value: string | null | undefined) {
 }
 
 // Find the event column so CMS rows can be filtered consistently.
-function findEventColumnIndex(rows: Array<Array<OverviewHtmlCell | null>>) {
+function findEventColumnIndex(rows: Array<Array<OverviewCell | null>>) {
   for (const row of rows.slice(0, 12)) {
     for (let cellIndex = 0; cellIndex < row.length; cellIndex += 1) {
       const cell = row[cellIndex];
@@ -116,20 +95,20 @@ function findEventColumnIndex(rows: Array<Array<OverviewHtmlCell | null>>) {
   return null;
 }
 
-function shouldExcludeCmsRow(row: Array<OverviewHtmlCell | null>, activeEventText = '') {
+function shouldExcludeCmsRow(row: Array<OverviewCell | null>, activeEventText = '') {
   const rowText = row.map((cell) => normalizeText(cell?.text ?? '')).join(' ').trim().toLowerCase();
   const label = `${normalizeText(activeEventText).toLowerCase()} ${rowText}`.trim();
   return CMS_EVENT_PATTERNS.some((pattern) => pattern.test(label));
 }
 
-function findCmsSectionLabel(row: Array<OverviewHtmlCell | null>) {
+function findCmsSectionLabel(row: Array<OverviewCell | null>) {
   const rowText = row.map((cell) => normalizeText(cell?.text ?? '')).join(' ').trim();
   return CMS_EVENT_PATTERNS.find((pattern) => pattern.test(rowText)) ? rowText : '';
 }
 
 // Rebuild the row matrix after filtering while preserving merged spans.
 function rebuildFilteredRows(
-  rows: Array<Array<OverviewHtmlCell | null>>,
+  rows: Array<Array<OverviewCell | null>>,
   rowHeights: Array<number | null>,
   keepRows: boolean[],
   columnCount: number,
@@ -142,8 +121,8 @@ function rebuildFilteredRows(
     newRowIndexMap.set(rowIndex, newRowIndex);
   });
 
-  const rebuiltRows: Array<Array<OverviewHtmlCell | null>> = Array.from({ length: keptRowIndexes.length }, () =>
-    Array.from({ length: columnCount }, () => null as OverviewHtmlCell | null),
+  const rebuiltRows: Array<Array<OverviewCell | null>> = Array.from({ length: keptRowIndexes.length }, () =>
+    Array.from({ length: columnCount }, () => null as OverviewCell | null),
   );
   const rebuiltRowHeights = keptRowIndexes.map((rowIndex) => rowHeights[rowIndex] ?? null);
   const occupied = new Map<string, number>();
@@ -174,7 +153,7 @@ function rebuildFilteredRows(
         newColIndex += 1;
       }
 
-      const nextCell: OverviewHtmlCell = {
+      const nextCell: OverviewCell = {
         text: cell.text,
         href: cell.href,
         rowSpan: adjustedRowSpan > 1 ? adjustedRowSpan : undefined,
@@ -197,7 +176,7 @@ function rebuildFilteredRows(
 }
 
 // Parse raw Google Sheets HTML into the shared overview snapshot shape.
-export function parseOverviewHtml(html: string): OverviewHtmlSnapshot {
+export function parseOverviewHtml(html: string): OverviewSnapshot {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const table = doc.querySelector<HTMLTableElement>('table.waffle, table');
@@ -209,14 +188,14 @@ export function parseOverviewHtml(html: string): OverviewHtmlSnapshot {
   const tableRows = Array.from(table.querySelectorAll('tr'));
   const columnCount = getColumnCount(table);
   const classStyles = collectClassStyles(doc);
-  const rows: Array<Array<OverviewHtmlCell | null>> = [];
+  const rows: Array<Array<OverviewCell | null>> = [];
   const rowHeights: Array<number | null> = [];
   const columnWidths: Array<number | null> = Array.from({ length: columnCount }, () => null);
   const occupied = new Map<string, number>();
 
   for (let rowIndex = 0; rowIndex < tableRows.length; rowIndex += 1) {
     const row = tableRows[rowIndex];
-    const rowCells = Array.from({ length: columnCount }, () => null as OverviewHtmlCell | null);
+    const rowCells = Array.from({ length: columnCount }, () => null as OverviewCell | null);
     const rowHeight = parseNumber(row.getAttribute('style')?.match(/height:\s*([0-9.]+)px/i)?.[1] ?? null);
     rowHeights.push(rowHeight);
 
@@ -266,7 +245,7 @@ export function parseOverviewHtml(html: string): OverviewHtmlSnapshot {
       if (mergedStyle['vertical-align']) {
         cellStyle['vertical-align'] = mergedStyle['vertical-align'].trim();
       }
-      const cell: OverviewHtmlCell = {
+      const cell: OverviewCell = {
         text: getTextContent(child),
         href: anchor?.href,
         rowSpan: spanRow > 1 ? spanRow : undefined,

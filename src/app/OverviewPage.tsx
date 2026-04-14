@@ -1,55 +1,58 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { clearOverviewCache, readOverviewCache, writeOverviewCache } from '../lib/googleSheets';
-import { type OverviewHtmlCell, type OverviewHtmlSnapshot } from '../lib/overviewHtml';
+import type { OverviewCell, OverviewSnapshot } from '../lib/types';
 import { loadOverviewSnapshot } from '../lib/overviewAppsScript';
 import {
   DEFAULT_ROW_THEME,
   SUB_DIVIDER_LABELS,
-  cellStyle,
   detectWingIndex,
   findDividerPlacement,
   findNamedColumnIndexes,
-  getStickyRowTop,
-  pickWingTheme,
   normalizeText,
-  shouldAllowTextOverflow,
+  pickWingTheme,
   type LoadSource,
   type MergedRange,
 } from '../lib/overviewView';
+import type {
+  CachedOverviewSnapshotWithPlayers,
+  LoadState,
+  PlayerViewGroups,
+  PlayerViewOption,
+  ProjectedTable,
+  ViewMode,
+} from './overviewTypes';
+import { LoadStatusBar } from './components/LoadStatusBar';
+import { ViewModeMenu } from './components/ViewModeMenu';
+import { RaidTable } from './components/RaidTable';
 
 const OVERVIEW_SOURCE_URL =
   import.meta.env.VITE_OVERVIEW_SOURCE_URL ??
   'https://script.google.com/macros/s/AKfycbxMPqyWkHLx1R5_zKxfJwkluvGtRqOJ6MY-igYbUPhq3FDM1cbXcs9VRL31h6z7f4Vtbg/exec';
-type LoadState = 'idle' | 'loading' | 'ready' | 'error';
-type CachedOverviewSnapshot = OverviewHtmlSnapshot & { source?: LoadSource };
-type CachedOverviewSnapshotWithPlayers = CachedOverviewSnapshot & { playerViewGroups?: PlayerViewGroups };
-type ViewMode = 'all' | 'sub1' | 'sub2' | `player:${number}`;
-
-type ProjectedTable = {
-  rows: Array<Array<OverviewHtmlCell | null>>;
-  columnWidths: Array<number | null>;
-  columnIndexes: number[];
-};
-
-type PlayerViewOption = {
-  columnIndex: number;
-  label: string;
-};
-
-type PlayerViewGroups = {
-  sub1: PlayerViewOption[];
-  sub2: PlayerViewOption[];
-};
 
 /**
  * Convert a cached local-storage payload back into the runtime snapshot shape.
  * Returns `null` when the payload does not contain usable row data.
  */
-function cacheToSnapshot(cache: unknown | null): OverviewHtmlSnapshot | null {
+function cacheToSnapshot(cache: unknown | null): OverviewSnapshot | null {
   const data = cache as {
     sheetTitle?: string;
     fetchedAt?: number;
-    rows?: Array<Array<Record<string, any> | null>>;
+    rows?: Array<Array<{
+      text?: unknown;
+      href?: unknown;
+      rowSpan?: unknown;
+      colSpan?: unknown;
+      bold?: unknown;
+      italic?: unknown;
+      underline?: unknown;
+      strikethrough?: unknown;
+      fontFamily?: unknown;
+      fontSize?: unknown;
+      whiteSpace?: unknown;
+      horizontalAlignment?: unknown;
+      verticalAlignment?: unknown;
+      style?: Record<string, unknown>;
+    } | null>>;
     rowHeights?: Array<number | null>;
     columnWidths?: Array<number | null>;
     mergedRanges?: Array<MergedRange>;
@@ -145,7 +148,7 @@ function cacheToSnapshot(cache: unknown | null): OverviewHtmlSnapshot | null {
  * Convert the live snapshot into the lightweight cache payload stored on disk.
  * This keeps refreshes from starting with an empty view after reloads.
  */
-function snapshotToCache(snapshot: OverviewHtmlSnapshot) {
+function snapshotToCache(snapshot: OverviewSnapshot) {
   return {
     spreadsheetId: 'html',
     sheetTitle: snapshot.title,
@@ -180,7 +183,7 @@ function snapshotToCache(snapshot: OverviewHtmlSnapshot) {
  * merged-cell spans and keeping the projected column indexes aligned with widths.
  */
 function projectColumns(
-  rows: Array<Array<OverviewHtmlCell | null>>,
+  rows: Array<Array<OverviewCell | null>>,
   columnWidths: Array<number | null>,
   columnIndexes: number[],
 ): ProjectedTable {
@@ -192,8 +195,8 @@ function projectColumns(
   });
 
   // Allocate the projected grid up front so span handling can fill holes safely.
-  const projectedRows: Array<Array<OverviewHtmlCell | null>> = Array.from({ length: rows.length }, () =>
-    Array.from({ length: columnIndexes.length }, () => null as OverviewHtmlCell | null),
+  const projectedRows: Array<Array<OverviewCell | null>> = Array.from({ length: rows.length }, () =>
+    Array.from({ length: columnIndexes.length }, () => null as OverviewCell | null),
   );
   // Keep the visible widths aligned with the projected columns.
   const projectedWidths = columnIndexes.map((columnIndex) => columnWidths[columnIndex] ?? null);
@@ -226,7 +229,7 @@ function projectColumns(
         }
       }
 
-      const nextCell: OverviewHtmlCell = {
+      const nextCell: OverviewCell = {
         text: cell.text,
         href: cell.href,
         rowSpan: adjustedRowSpan > 1 ? adjustedRowSpan : undefined,
@@ -259,7 +262,7 @@ function projectColumns(
 
 // Pull the player labels from the most likely header row so the view selector stays in sync with the source.
 function getPlayerViewGroups(
-  rows: Array<Array<OverviewHtmlCell | null>>,
+  rows: Array<Array<OverviewCell | null>>,
   dividerColumnIndex: number | null,
   alwaysVisibleColumns: number[],
 ): PlayerViewGroups {
@@ -294,19 +297,6 @@ function getPlayerViewGroups(
   }
 
   return { sub1: [], sub2: [] };
-}
-
-// Turn a zero-based column index into the spreadsheet letter label used for disambiguation.
-function getColumnLetter(columnIndex: number) {
-  let index = columnIndex;
-  let label = '';
-
-  while (index >= 0) {
-    label = String.fromCharCode(65 + (index % 26)) + label;
-    index = Math.floor(index / 26) - 1;
-  }
-
-  return label;
 }
 
 // Extract the selected player column from a `player:<index>` mode string.
@@ -349,20 +339,18 @@ function getViewColumnIndexes(
 
 // Render the read-only overview page and keep it synced with the live source.
 export default function OverviewPage() {
-  const cachedOverview = readOverviewCache() as CachedOverviewSnapshotWithPlayers | null;
-  const [snapshot, setSnapshot] = useState<OverviewHtmlSnapshot | null>(() => cacheToSnapshot(cachedOverview));
+  const cachedOverview = useMemo(() => readOverviewCache() as CachedOverviewSnapshotWithPlayers | null, []);
+  const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(() => cacheToSnapshot(cachedOverview));
   const [loadState, setLoadState] = useState<LoadState>(() => (snapshot ? 'ready' : 'idle'));
   const [loadSource, setLoadSource] = useState<LoadSource | null>(() => cachedOverview?.source ?? null);
   const [hasLiveSnapshot, setHasLiveSnapshot] = useState(false);
   const [error, setError] = useState('');
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(() => snapshot?.fetchedAt ?? null);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const viewMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const rows = snapshot?.rows ?? [];
-  const columnWidths = snapshot?.columnWidths ?? [];
-  const rowHeights = snapshot?.rowHeights ?? [];
+  const rows = useMemo(() => snapshot?.rows ?? [], [snapshot?.rows]);
+  const columnWidths = useMemo(() => snapshot?.columnWidths ?? [], [snapshot?.columnWidths]);
+  const rowHeights = useMemo(() => snapshot?.rowHeights ?? [], [snapshot?.rowHeights]);
   const columnCount = useMemo(() => rows.reduce((max, row) => Math.max(max, row.length), 0), [rows]);
   const divider = useMemo(() => findDividerPlacement(rows, SUB_DIVIDER_LABELS), [rows]);
   const persistentColumns = useMemo(() => findNamedColumnIndexes(rows, ['encounter', 'notes', 'event', 'events']), [rows]);
@@ -382,15 +370,13 @@ export default function OverviewPage() {
     () => projectColumns(rows, columnWidths, viewColumnIndexes),
     [rows, columnWidths, viewColumnIndexes],
   );
-  const tableMinWidth = Math.max(projected.columnIndexes.length, 1) * 120;
-  const headerRowHeight = 36;
   const themedRows = useMemo(() => {
     // Carry the wing theme forward until the next wing header appears.
     let activeTheme = DEFAULT_ROW_THEME;
     return projected.rows.map((row) => {
       const wingIndex = detectWingIndex(row);
       if (wingIndex) {
-        activeTheme = pickWingTheme(row);
+        activeTheme = pickWingTheme(row); // eslint-disable-line react-hooks/immutability
       }
       return {
         row,
@@ -405,6 +391,7 @@ export default function OverviewPage() {
     const allPlayers = [...effectivePlayerViewGroups.sub1, ...effectivePlayerViewGroups.sub2];
     return allPlayers.find((player) => player.columnIndex === playerColumnIndex) ?? null;
   }, [viewMode, effectivePlayerViewGroups]);
+
   const selectedViewLabel = useMemo(() => {
     if (viewMode === 'all') return 'All';
     if (viewMode === 'sub1') return 'Sub 1';
@@ -417,29 +404,6 @@ export default function OverviewPage() {
     }
     return 'Player';
   }, [viewMode, selectedPlayer, effectivePlayerViewGroups]);
-
-  useEffect(() => {
-    if (!viewMenuOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const root = viewMenuRef.current;
-      if (!root || root.contains(event.target as Node)) return;
-      setViewMenuOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setViewMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [viewMenuOpen]);
 
   // Refresh the sheet from the live source and update cache/state together.
   const loadHtml = async () => {
@@ -459,7 +423,7 @@ export default function OverviewPage() {
       setLastLoadedAt(nextSnapshot.fetchedAt);
       setHasLiveSnapshot(true);
       setLoadState('ready');
-      writeOverviewCache({ ...snapshotToCache(nextSnapshot), source, playerViewGroups: nextPlayerViewGroups } as never);
+      writeOverviewCache({ ...snapshotToCache(nextSnapshot), source, playerViewGroups: nextPlayerViewGroups });
     } catch (loadError) {
       setLoadState('error');
       setError(loadError instanceof Error ? loadError.message : 'Could not load live Overview data.');
@@ -470,169 +434,42 @@ export default function OverviewPage() {
     void loadHtml();
   }, []);
 
+  const handleClearCache = () => {
+    clearOverviewCache();
+    setSnapshot(null);
+    setLastLoadedAt(null);
+    setLoadSource(null);
+    setHasLiveSnapshot(false);
+    // Immediately re-fetch so the user sees fresh data rather than an empty screen.
+    void loadHtml();
+  };
+
+  const tableMinWidth = Math.max(projected.columnIndexes.length, 1) * 120;
+  const headerRowHeight = 36;
+
   return (
     <div className="h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(34,197,94,0.12),_transparent_24%),linear-gradient(180deg,_#07101f_0%,_#0b1220_48%,_#050814_100%)] px-3 py-4 text-slate-100">
       <div className="flex h-full min-h-0 w-full max-w-[2200px] flex-col gap-2 md:flex-row md:gap-4">
-        <aside className="rounded-2xl border border-slate-700/60 bg-slate-900/80 p-3 shadow-lg shadow-black/20 md:w-20 md:flex-none">
-          <div className="flex h-full min-h-0 flex-col items-start gap-3 md:items-center">
-            <div className="flex flex-wrap gap-2 text-[8px] font-semibold uppercase tracking-[0.12em] md:flex-col md:gap-2">
-              <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-0.5 text-slate-300">
-                {loadState === 'ready' ? 'Loaded' : loadState === 'loading' ? 'Loading' : 'Idle'}
-              </span>
-              <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-0.5 text-slate-300">
-                {lastLoadedAt ? new Date(lastLoadedAt).toLocaleString() : 'Not loaded'}
-              </span>
-              <span className="rounded-full border border-slate-700 bg-slate-950/60 px-2.5 py-0.5 text-slate-300">
-                {loadSource === 'apps-script' ? 'Apps Script' : loadSource === 'html-fallback' ? 'HTML fallback' : 'Source unknown'}
-              </span>
-            </div>
-            {error ? <div className="text-sm text-rose-200">{error}</div> : null}
-          </div>
-        </aside>
+        <LoadStatusBar
+          loadState={loadState}
+          lastLoadedAt={lastLoadedAt}
+          loadSource={loadSource}
+          error={error}
+        />
 
         <section className="min-h-0 min-w-0 flex flex-1 flex-col rounded-2xl border border-slate-700/60 bg-slate-950/70 shadow-lg shadow-black/20">
           <div className="relative z-[300] flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-2">
             <div className="text-[10px] font-semibold uppercase tracking-[0.36em] text-slate-400">Trouble Overview</div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="text-xs text-slate-400">Source: {OVERVIEW_SOURCE_URL}</div>
-              <div ref={viewMenuRef} className="relative z-[300]">
-                <span className="mr-2 text-[8px] font-semibold uppercase tracking-[0.16em] text-slate-500">View</span>
-                <button
-                  type="button"
-                  onClick={() => setViewMenuOpen((open) => !open)}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-[8px] font-semibold uppercase tracking-[0.12em] text-slate-200 outline-none transition hover:bg-slate-900"
-                >
-                  <span>{selectedViewLabel}</span>
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                    className={`h-3 w-3 text-slate-400 transition ${viewMenuOpen ? 'rotate-180' : ''}`}
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.25a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08Z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </button>
-                {viewMenuOpen ? (
-                  <div className="absolute right-0 top-[calc(100%+0.4rem)] z-[400] w-72 overflow-hidden rounded-2xl border border-slate-700/70 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur">
-                    <div className="max-h-96 overflow-auto p-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewMode('all');
-                          setViewMenuOpen(false);
-                        }}
-                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
-                          viewMode === 'all' ? 'bg-cyan-400/15 text-cyan-100' : 'text-slate-200 hover:bg-slate-900'
-                        }`}
-                      >
-                        <span>All</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewMode('sub1');
-                          setViewMenuOpen(false);
-                        }}
-                        className={`mt-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
-                          viewMode === 'sub1' || (selectedPlayer && effectivePlayerViewGroups.sub1.some((player) => player.columnIndex === selectedPlayer.columnIndex))
-                            ? 'bg-cyan-400/15 text-cyan-100'
-                            : 'text-slate-200 hover:bg-slate-900'
-                        }`}
-                      >
-                        <span>Sub 1</span>
-                      </button>
-                      {showPlayerViews && effectivePlayerViewGroups.sub1.length ? (
-                        <div className="pl-3 pt-1">
-                          <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Players
-                          </div>
-                          <div className="space-y-1">
-                            {effectivePlayerViewGroups.sub1.map((player) => {
-                              const labelCounts = [
-                                ...effectivePlayerViewGroups.sub1,
-                                ...effectivePlayerViewGroups.sub2,
-                              ].filter((option) => option.label === player.label).length;
-                              const label =
-                                labelCounts > 1 ? `${player.label} (${getColumnLetter(player.columnIndex)})` : player.label;
-                              return (
-                                <button
-                                  key={`sub1-${player.columnIndex}`}
-                                  type="button"
-                                  onClick={() => {
-                                    setViewMode(`player:${player.columnIndex}`);
-                                    setViewMenuOpen(false);
-                                  }}
-                                  className={`flex w-full rounded-xl px-3 py-2 text-left text-[10px] font-medium transition ${
-                                    viewMode === `player:${player.columnIndex}`
-                                      ? 'bg-cyan-400/15 text-cyan-100'
-                                      : 'text-slate-300 hover:bg-slate-900'
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setViewMode('sub2');
-                          setViewMenuOpen(false);
-                        }}
-                        className={`mt-2 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-[0.16em] transition ${
-                          viewMode === 'sub2' || (selectedPlayer && effectivePlayerViewGroups.sub2.some((player) => player.columnIndex === selectedPlayer.columnIndex))
-                            ? 'bg-cyan-400/15 text-cyan-100'
-                            : 'text-slate-200 hover:bg-slate-900'
-                        }`}
-                      >
-                        <span>Sub 2</span>
-                      </button>
-                      {showPlayerViews && effectivePlayerViewGroups.sub2.length ? (
-                        <div className="pl-3 pt-1">
-                          <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Players
-                          </div>
-                          <div className="space-y-1">
-                            {effectivePlayerViewGroups.sub2.map((player) => {
-                              const labelCounts = [
-                                ...effectivePlayerViewGroups.sub1,
-                                ...effectivePlayerViewGroups.sub2,
-                              ].filter((option) => option.label === player.label).length;
-                              const label =
-                                labelCounts > 1 ? `${player.label} (${getColumnLetter(player.columnIndex)})` : player.label;
-                              return (
-                                <button
-                                  key={`sub2-${player.columnIndex}`}
-                                  type="button"
-                                  onClick={() => {
-                                    setViewMode(`player:${player.columnIndex}`);
-                                    setViewMenuOpen(false);
-                                  }}
-                                  className={`flex w-full rounded-xl px-3 py-2 text-left text-[10px] font-medium transition ${
-                                    viewMode === `player:${player.columnIndex}`
-                                      ? 'bg-cyan-400/15 text-cyan-100'
-                                      : 'text-slate-300 hover:bg-slate-900'
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+              <ViewModeMenu
+                viewMode={viewMode}
+                selectedViewLabel={selectedViewLabel}
+                showPlayerViews={showPlayerViews}
+                effectivePlayerViewGroups={effectivePlayerViewGroups}
+                selectedPlayer={selectedPlayer}
+                onViewModeChange={setViewMode}
+              />
               <button
                 type="button"
                 onClick={() => void loadHtml()}
@@ -643,187 +480,42 @@ export default function OverviewPage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  clearOverviewCache();
-                  setSnapshot(null);
-                  setLastLoadedAt(null);
-                  setLoadSource(null);
-                  setHasLiveSnapshot(false);
-                  setViewMenuOpen(false);
-                  setLoadState('idle');
-                }}
+                onClick={handleClearCache}
                 className="rounded-full border border-rose-300/30 bg-rose-400/10 px-2.5 py-1 text-[8px] font-semibold uppercase tracking-[0.12em] text-rose-100 transition hover:bg-rose-400/20"
               >
                 Clear cache
               </button>
             </div>
           </div>
+
           <div className="overview-scrollbar min-h-0 min-w-0 flex-1 overflow-auto rounded-2xl pt-0">
-            {loadState === 'loading' && !snapshot ? (
+            {snapshot ? (
+              <RaidTable
+                projected={projected}
+                themedRows={themedRows}
+                rowHeights={rowHeights}
+                divider={divider}
+                tableMinWidth={tableMinWidth}
+                headerRowHeight={headerRowHeight}
+                hasRows={rows.length > 0}
+              />
+            ) : loadState === 'loading' ? (
               <div className="flex min-h-full items-center justify-center px-4 py-12">
                 <div className="rounded-2xl border border-slate-700/60 bg-slate-900/80 px-5 py-4 text-center shadow-lg shadow-black/20">
                   <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Loading</div>
                   <div className="mt-2 text-sm text-slate-200">Fetching live Overview data...</div>
                 </div>
               </div>
-            ) : snapshot ? (
-                <table
-                  className="table-fixed border-separate border-spacing-0 text-[10px]"
-                  style={{
-                    minWidth: `${tableMinWidth}px`,
-                    width: 'max-content',
-                  }}
-                >
-                  <tbody>
-                    <tr className="bg-slate-950 text-[9px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                      <th
-                        scope="col"
-                        className="sticky left-0 top-0 z-[120] border-b border-r border-slate-700/60 bg-slate-950 px-2 py-2 text-center"
-                        style={{
-                          width: '48px',
-                          minWidth: '48px',
-                          maxWidth: '48px',
-                          height: `${headerRowHeight}px`,
-                          backgroundColor: '#0a101a',
-                          color: '#d6dfe8',
-                        }}
-                      >
-                        #
-                      </th>
-                      {projected.columnIndexes.map((index, projectedIndex) => {
-                        const letter = String.fromCharCode(65 + index);
-                        const width = projected.columnWidths[projectedIndex] ?? 120;
-                        return (
-                          <th
-                            key={letter}
-                            scope="col"
-                        className="sticky top-0 z-40 border-b border-r border-slate-700/60 bg-slate-950 px-2 py-2 text-center"
-                            style={{
-                              width: `${width}px`,
-                              minWidth: `${width}px`,
-                              maxWidth: `${width}px`,
-                              height: `${headerRowHeight}px`,
-                            }}
-                          >
-                            {letter}
-                          </th>
-                        );
-                      })}
-                    </tr>
-                    {themedRows.map(({ row, theme }, rowIndex) => (
-                      (() => {
-                        const stickyTop = getStickyRowTop(rowIndex, rowHeights);
-                        const isStickyRow = stickyTop !== undefined;
-                        return (
-                        <tr
-                        key={`${rowIndex}-${row.find((cell) => cell)?.text ?? 'row'}`}
-                        style={{ backgroundColor: theme.rowBg, color: theme.text }}
-                      >
-                        <td
-                          className="sticky left-0 z-20 border-b border-r border-slate-700/60 px-2 py-1 text-center"
-                          style={{
-                            width: '48px',
-                            minWidth: '48px',
-                            maxWidth: '48px',
-                            height: rowHeights[rowIndex] ?? undefined,
-                            backgroundColor: '#0a101a',
-                            color: '#d6dfe8',
-                            top: isStickyRow ? `${headerRowHeight + stickyTop}px` : undefined,
-                            zIndex: rowIndex < 3 ? 90 : isStickyRow ? 80 : 60,
-                          }}
-                        >
-                          {rowIndex + 1}
-                        </td>
-                        {row.map((cell, cellIndex) => {
-                          if (!cell) return null;
-                          const width = projected.columnWidths[cellIndex] ?? null;
-                          const height = rowHeights[rowIndex] ?? null;
-                          const isDivider = divider?.columnIndex === cellIndex && rowIndex >= (divider?.startRowIndex ?? 0);
-                          const isStickyColumn = cellIndex === 0;
-                          const baseCellStyle = cellStyle(cell, width, height);
-                          const allowOverflow = shouldAllowTextOverflow(cell);
-                          const sectionStyle = baseCellStyle;
-                          const centeredOverflowText = allowOverflow && !cell.style?.['text-align'] ? 'center' : cell.style?.['text-align'];
-                          const cellTextAlign = (centeredOverflowText || cell.style?.['text-align'] || undefined) as CSSProperties['textAlign'];
-                          // Row 1 to 3 stay pinned to the top; column A and the row numbers stay frozen on the left.
-                          const finalStyle: CSSProperties = {
-                            ...sectionStyle,
-                            backgroundColor: theme.rowBg,
-                            position: isStickyRow || isStickyColumn ? 'sticky' : undefined,
-                            left: isStickyColumn ? '48px' : undefined,
-                            top: isStickyRow ? `${headerRowHeight + stickyTop}px` : undefined,
-                            zIndex:
-                              rowIndex < 3 && isStickyColumn
-                                ? 70
-                                : rowIndex < 3
-                                  ? 55
-                                  : isStickyColumn
-                                    ? 20
-                                    : isStickyRow
-                                      ? 10
-                                      : undefined,
-                          };
-                          return (
-                            <td
-                              key={`${rowIndex}-${cellIndex}`}
-                              rowSpan={cell.rowSpan}
-                              colSpan={cell.colSpan}
-                              title={cell.text}
-                              className={`border-b border-r border-slate-800/70 px-2 py-1 align-top ${
-                                isDivider ? 'border-l-2 border-l-cyan-400/80' : ''
-                              } ${isStickyColumn ? 'shadow-[1px_0_0_0_rgba(15,23,42,0.9)]' : ''}`}
-                              style={finalStyle}
-                            >
-                              {cell.href ? (
-                                <a
-                                  href={cell.href}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className={`block leading-4 hover:underline ${allowOverflow ? 'whitespace-nowrap' : 'break-words'}`}
-                                  style={{
-                                    whiteSpace: allowOverflow ? 'nowrap' : cell.style?.['white-space'] || 'pre-wrap',
-                                    fontWeight: cell.style?.['font-weight'] || (cell.bold ? '700' : undefined),
-                                    textAlign: cellTextAlign,
-                                  }}
-                                >
-                                  {cell.text || '\u00A0'}
-                                </a>
-                              ) : (
-                                <div
-                                  className={`${allowOverflow ? 'whitespace-nowrap' : 'break-words'} leading-4`}
-                                  style={{
-                                    whiteSpace: allowOverflow ? 'nowrap' : cell.style?.['white-space'] || 'pre-wrap',
-                                    fontWeight: cell.style?.['font-weight'] || (cell.bold ? '700' : undefined),
-                                    textAlign: cellTextAlign,
-                                  }}
-                                >
-                                  {cell.text || '\u00A0'}
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                        );
-                      })()
-                    ))}
-                    {!rows.length ? (
-                      <tr>
-                        <td className="px-4 py-10 text-sm text-slate-400">No sheet data loaded.</td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-            ) : (
+            ) : loadState === 'error' ? (
               <div className="flex min-h-full items-center justify-center px-4 py-12">
                 <div className="max-w-xl rounded-2xl border border-slate-700/60 bg-slate-900/80 px-5 py-4 text-center shadow-lg shadow-black/20">
                   <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Load failed</div>
                   <div className="mt-2 text-sm text-slate-200">
-                    No cached data and live fetch failed. Check source URL or script access.
+                    Live fetch failed. Check source URL or script access.
                   </div>
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
         </section>
       </div>

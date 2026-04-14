@@ -6,7 +6,7 @@
 // - filter CMS rows in the same way as the HTML fallback
 // - fall back to the HTML parser if the response is not JSON
 
-import type { OverviewHtmlCell, OverviewHtmlSnapshot } from './overviewHtml';
+import type { OverviewCell, OverviewSnapshot } from './types';
 import {
   findEventColumnIndex,
   findCmsSectionLabel,
@@ -35,7 +35,7 @@ export type OverviewAppsScriptPayload = {
 };
 
 // Convert the Apps Script JSON payload into the same cell model used by the HTML parser.
-export function buildSnapshotFromJson(payload: OverviewAppsScriptPayload): OverviewHtmlSnapshot {
+export function buildSnapshotFromAppsScriptPayload(payload: OverviewAppsScriptPayload): OverviewSnapshot {
   const matrix = (payload.rows ?? payload.values ?? []).map((row) => row.map((cell) => String(cell ?? '')));
   const backgroundMatrix = (payload.backgroundColors ?? []).map((row) => row.map((cell) => String(cell ?? '')));
   const foregroundMatrix = (payload.foregroundColors ?? []).map((row) => row.map((cell) => String(cell ?? '')));
@@ -45,12 +45,12 @@ export function buildSnapshotFromJson(payload: OverviewAppsScriptPayload): Overv
     backgroundMatrix.reduce((max, row) => Math.max(max, row.length), 0),
     foregroundMatrix.reduce((max, row) => Math.max(max, row.length), 0),
   );
-  const rows: Array<Array<OverviewHtmlCell>> = matrix.map((row, rowIndex) =>
+  const rows: Array<Array<OverviewCell>> = matrix.map((row, rowIndex) =>
     Array.from({ length: maxColumns }, (_, cellIndex) => {
       const text = row[cellIndex] ?? '';
       return {
         text,
-        bold: Boolean(payload.bold?.[rowIndex]?.[cellIndex]),
+        bold: !!payload.bold?.[rowIndex]?.[cellIndex],
         rowSpan: undefined,
         colSpan: undefined,
         style: {
@@ -58,7 +58,7 @@ export function buildSnapshotFromJson(payload: OverviewAppsScriptPayload): Overv
           color: normalizeColorString(foregroundMatrix[rowIndex]?.[cellIndex]),
           'text-align': normalizeAlignment(payload.horizontalAlignments?.[rowIndex]?.[cellIndex]),
           'vertical-align': normalizeAlignment(payload.verticalAlignments?.[rowIndex]?.[cellIndex]),
-          'font-weight': Boolean(payload.bold?.[rowIndex]?.[cellIndex]) ? '700' : '',
+          'font-weight': payload.bold?.[rowIndex]?.[cellIndex] ? '700' : '',
         },
       };
     }),
@@ -109,7 +109,7 @@ export function buildSnapshotFromJson(payload: OverviewAppsScriptPayload): Overv
 }
 
 // Fetch the overview from Apps Script and normalize the JSON response.
-export async function loadOverviewSnapshot(url: string): Promise<{ snapshot: OverviewHtmlSnapshot; source: 'apps-script' }> {
+export async function loadOverviewSnapshot(url: string): Promise<{ snapshot: OverviewSnapshot; source: 'apps-script' }> {
   const response = await fetch(url, {
     cache: 'no-store',
     credentials: 'omit',
@@ -123,7 +123,7 @@ export async function loadOverviewSnapshot(url: string): Promise<{ snapshot: Ove
 
   if (contentType.includes('application/json') || bodyText.trim().startsWith('{') || bodyText.trim().startsWith('[')) {
     const payload = JSON.parse(bodyText) as OverviewAppsScriptPayload;
-    return { snapshot: buildSnapshotFromJson(payload), source: 'apps-script' as const };
+    return { snapshot: buildSnapshotFromAppsScriptPayload(payload), source: 'apps-script' as const };
   }
 
   const preview = bodyText.trim().slice(0, 200).replace(/\s+/g, ' ');

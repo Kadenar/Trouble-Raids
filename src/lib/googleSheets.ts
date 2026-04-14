@@ -7,38 +7,22 @@
 
 export const OVERVIEW_CACHE_KEY = 'trouble.overviewSheet.v2';
 
-export type OverviewSheetCell = {
-  text: string;
-  href?: string;
-  rowSpan?: number;
-  colSpan?: number;
-  bold?: boolean;
-  style?: Record<string, string>;
-};
-
-export type OverviewSheetSnapshot = {
-  spreadsheetId: string;
-  sheetTitle: string;
-  fetchedAt: number;
-  rowHeights: Array<number | null>;
-  columnWidths: Array<number | null>;
-  rows: Array<Array<OverviewSheetCell | null>>;
-};
-
 // Read the cached overview snapshot from localStorage.
-export function readOverviewCache() {
+// Returns `unknown` — callers are responsible for narrowing or casting to their expected shape.
+export function readOverviewCache(): unknown {
   try {
     const raw = window.localStorage.getItem(OVERVIEW_CACHE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as OverviewSheetSnapshot;
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }
 }
 
-// Persist the overview snapshot to localStorage.
-export function writeOverviewCache(snapshot: OverviewSheetSnapshot) {
-  window.localStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(snapshot));
+// Persist any serializable payload to localStorage.
+// Accepts unknown because the cache layer only serializes — it does not depend on the shape.
+export function writeOverviewCache(payload: unknown) {
+  window.localStorage.setItem(OVERVIEW_CACHE_KEY, JSON.stringify(payload));
 }
 
 // Remove the cached overview snapshot from localStorage.
